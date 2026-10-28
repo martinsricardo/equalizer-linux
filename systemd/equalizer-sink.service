@@ -1,0 +1,16 @@
+[Unit]
+Description=Equalizador de Som para Linux (Persistent Audio Sink)
+Documentation=https://github.com/ricardo/equalizer-linux
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+PartOf=pipewire.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/pipewire -c %h/.config/equalizer-linux/pipewire-sink.conf
+Restart=always
+RestartSec=1s
+
+[Install]
+WantedBy=default.target

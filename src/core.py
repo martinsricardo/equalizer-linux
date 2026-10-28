@@ -12,10 +12,17 @@ from .presets import BANDS_SPEC, DEFAULT_PRESETS
 CONFIG_DIR = Path(os.environ.get("EQUALIZER_CONFIG_DIR", Path.home() / ".config" / "equalizer-linux"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PRESETS_FILE = CONFIG_DIR / "presets.json"
+PIPEWIRE_SINK_CONF_FILE = CONFIG_DIR / "pipewire-sink.conf"
 PIPEWIRE_CONF_FILE = CONFIG_DIR / "pipewire-filter.conf"
-SERVICE_NAME = "equalizer-linux.service"
-SINK_NODE_NAME = "effect_input.equalizer_linux"
-SOURCE_NODE_NAME = "effect_output.equalizer_linux"
+
+SINK_SERVICE_NAME = "equalizer-sink.service"
+FILTER_SERVICE_NAME = "equalizer-linux.service"
+SERVICE_NAME = FILTER_SERVICE_NAME
+
+VIRTUAL_SINK_NAME = "equalizer_sink"
+SINK_OUT_NAME = "equalizer_sink_out"
+FILTER_IN_NAME = "effect_input.equalizer_linux"
+FILTER_OUT_NAME = "effect_output.equalizer_linux"
 
 
 def ensure_config_dir():
@@ -150,6 +157,62 @@ def restore_physical_default_sink() -> bool:
     return False
 
 
+def generate_pipewire_sink_conf() -> str:
+    """
+    Generate configuration for the persistent audio sink.
+    This sink NEVER dies when changing EQ bands, preventing browser video pauses.
+    """
+    conf = f"""# Sink permanente do Equalizador Linux
+context.properties = {{
+    log.level = 0
+}}
+
+context.spa-libs = {{
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.*       = support/libspa-support
+}}
+
+context.modules = [
+    {{ name = libpipewire-module-rt flags = [ ifexists nofail ] }}
+    {{ name = libpipewire-module-protocol-native }}
+    {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-adapter }}
+    {{ name = libpipewire-module-loopback
+        args = {{
+            node.description = "Equalizador Linux"
+            audio.channels   = 2
+            audio.position   = [ FL FR ]
+            capture.props = {{
+                node.name        = "{VIRTUAL_SINK_NAME}"
+                media.class      = "Audio/Sink"
+                priority.session = 1500
+                priority.driver  = 1500
+                audio.channels   = 2
+                audio.position   = [ FL FR ]
+            }}
+            playback.props = {{
+                node.name        = "{SINK_OUT_NAME}"
+                node.passive     = true
+                audio.channels   = 2
+                audio.position   = [ FL FR ]
+                target.object    = "{FILTER_IN_NAME}"
+            }}
+        }}
+    }}
+]
+"""
+    return conf
+
+
+def write_pipewire_sink_conf() -> Path:
+    """Write the persistent sink configuration."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    content = generate_pipewire_sink_conf()
+    with open(PIPEWIRE_SINK_CONF_FILE, "w", encoding="utf-8") as f:
+        f.write(content)
+    return PIPEWIRE_SINK_CONF_FILE
+
+
 def generate_pipewire_filter_conf(gains: List[float]) -> str:
     """Generate the PipeWire SPA-JSON configuration file for the equalizer filter chain."""
     filter_entries = []
@@ -167,9 +230,7 @@ def generate_pipewire_filter_conf(gains: List[float]) -> str:
     target_name, _ = get_physical_default_sink()
     target_prop = f'\n                target.object    = "{target_name}"' if target_name else ""
 
-    conf_template = f"""# Configuração do Equalizador PipeWire gerada automaticamente pelo equalizer-linux
-# Não edite manualmente enquanto o serviço estiver ativo.
-
+    conf_template = f"""# Configuração do DSP Equalizador PipeWire gerada automaticamente pelo equalizer-linux
 context.properties = {{
     log.level = 0
 }}
@@ -188,8 +249,10 @@ context.modules = [
     {{ name = libpipewire-module-adapter }}
     {{ name = libpipewire-module-filter-chain
         args = {{
-            node.description = "Equalizador Linux"
-            media.name       = "Equalizador Linux"
+            node.description = "Equalizador Linux DSP"
+            media.name       = "Equalizador Linux DSP"
+            audio.channels   = 2
+            audio.position   = [ FL FR ]
             filter.graph = {{
                 nodes = [
                     {{
@@ -203,18 +266,21 @@ context.modules = [
                         }}
                     }}
                 ]
+                inputs  = [ "eq:In 1" "eq:In 2" ]
+                outputs = [ "eq:Out 1" "eq:Out 2" ]
             }}
-            audio.channels = 2
-            audio.position = [ FL FR ]
             capture.props = {{
-                node.name        = "{SINK_NODE_NAME}"
-                media.class      = Audio/Sink
-                priority.session = 1500
-                priority.driver  = 1500
+                node.name        = "{FILTER_IN_NAME}"
+                node.passive     = true
+                audio.channels   = 2
+                audio.position   = [ FL FR ]
+                target.object    = "{SINK_OUT_NAME}"
             }}
             playback.props = {{
-                node.name        = "{SOURCE_NODE_NAME}"
-                node.passive     = true{target_prop}
+                node.name        = "{FILTER_OUT_NAME}"
+                node.passive     = true
+                audio.channels   = 2
+                audio.position   = [ FL FR ]{target_prop}
             }}
         }}
     }}
@@ -234,10 +300,24 @@ def write_pipewire_conf(gains: List[float]) -> Path:
 
 # Systemd Service Management
 def is_service_running() -> bool:
-    """Check if the equalizer systemd user service is currently active."""
+    """Check if the equalizer filter service is currently active."""
     try:
         res = subprocess.run(
-            ["systemctl", "--user", "is-active", SERVICE_NAME],
+            ["systemctl", "--user", "is-active", FILTER_SERVICE_NAME],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return res.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def is_sink_service_running() -> bool:
+    """Check if the persistent sink service is currently active."""
+    try:
+        res = subprocess.run(
+            ["systemctl", "--user", "is-active", SINK_SERVICE_NAME],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -248,10 +328,10 @@ def is_service_running() -> bool:
 
 
 def is_service_enabled() -> bool:
-    """Check if the equalizer systemd user service is enabled for startup."""
+    """Check if the equalizer systemd user services are enabled for startup."""
     try:
         res = subprocess.run(
-            ["systemctl", "--user", "is-enabled", SERVICE_NAME],
+            ["systemctl", "--user", "is-enabled", FILTER_SERVICE_NAME],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -262,15 +342,11 @@ def is_service_enabled() -> bool:
 
 
 def enable_autostart() -> bool:
-    """Enable the equalizer service to start on user login / computer boot."""
+    """Enable services to start on user login / computer boot."""
     try:
-        res = subprocess.run(
-            ["systemctl", "--user", "enable", SERVICE_NAME],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return res.returncode == 0
+        res1 = subprocess.run(["systemctl", "--user", "enable", SINK_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        res2 = subprocess.run(["systemctl", "--user", "enable", FILTER_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return res1.returncode == 0 and res2.returncode == 0
     except Exception:
         return False
 
@@ -278,22 +354,26 @@ def enable_autostart() -> bool:
 def disable_autostart() -> bool:
     """Disable automatic startup."""
     try:
-        res = subprocess.run(
-            ["systemctl", "--user", "disable", SERVICE_NAME],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return res.returncode == 0
+        res1 = subprocess.run(["systemctl", "--user", "disable", SINK_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        res2 = subprocess.run(["systemctl", "--user", "disable", FILTER_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return res1.returncode == 0 and res2.returncode == 0
     except Exception:
         return False
 
 
+def ensure_sink_service_running():
+    """Ensure the persistent virtual sink is active."""
+    write_pipewire_sink_conf()
+    if not is_sink_service_running():
+        subprocess.run(["systemctl", "--user", "start", SINK_SERVICE_NAME], stderr=subprocess.DEVNULL)
+
+
 def start_service() -> bool:
-    """Start the equalizer service."""
+    """Start both the persistent sink and the filter service."""
+    ensure_sink_service_running()
     try:
         res = subprocess.run(
-            ["systemctl", "--user", "start", SERVICE_NAME],
+            ["systemctl", "--user", "start", FILTER_SERVICE_NAME],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -304,25 +384,25 @@ def start_service() -> bool:
 
 
 def stop_service() -> bool:
-    """Stop the equalizer service and restore the physical default sink."""
+    """Stop the equalizer services and restore the physical default sink."""
     restore_physical_default_sink()
     try:
-        res = subprocess.run(
-            ["systemctl", "--user", "stop", SERVICE_NAME],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return res.returncode == 0
+        subprocess.run(["systemctl", "--user", "stop", FILTER_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["systemctl", "--user", "stop", SINK_SERVICE_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return True
     except Exception:
         return False
 
 
 def restart_service() -> bool:
-    """Restart the equalizer service."""
+    """
+    Restart the filter DSP service.
+    NOTE: The persistent sink is NOT restarted, so Firefox/YouTube videos DO NOT PAUSE!
+    """
+    ensure_sink_service_running()
     try:
         res = subprocess.run(
-            ["systemctl", "--user", "restart", SERVICE_NAME],
+            ["systemctl", "--user", "restart", FILTER_SERVICE_NAME],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -333,13 +413,13 @@ def restart_service() -> bool:
 
 
 def find_equalizer_sink_id() -> Optional[int]:
-    """Find the PipeWire node ID for the equalizer sink."""
+    """Find the PipeWire node ID for the persistent equalizer sink."""
     try:
         out = subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL)
         nodes = json.loads(out)
         for node in nodes:
             props = node.get("info", {}).get("props", {})
-            if props.get("node.name") == SINK_NODE_NAME:
+            if props.get("node.name") == VIRTUAL_SINK_NAME:
                 return node.get("id")
     except Exception:
         pass
@@ -347,7 +427,7 @@ def find_equalizer_sink_id() -> Optional[int]:
 
 
 def set_default_sink() -> bool:
-    """Set the equalizer sink as default output device in WirePlumber."""
+    """Set the persistent equalizer sink as default output device in WirePlumber."""
     sink_id = find_equalizer_sink_id()
     if sink_id is not None:
         try:
@@ -367,7 +447,6 @@ def apply_preamp_volume(preamp_db: float):
     sink_id = find_equalizer_sink_id()
     if sink_id is not None:
         try:
-            # Linear factor = 10^(dB / 20)
             linear_vol = max(0.0, min(1.5, 10.0 ** (preamp_db / 20.0)))
             subprocess.run(
                 ["wpctl", "set-volume", str(sink_id), f"{linear_vol:.2f}"],
@@ -381,11 +460,14 @@ def apply_preamp_volume(preamp_db: float):
 def apply_settings(config: Dict[str, Any]) -> bool:
     """
     Apply configuration:
-    1. Write pipewire-filter.conf (flat 0 dB if bypassed)
-    2. Start or restart service
-    3. Update default sink & preamp volume
+    1. Ensure persistent sink is active (so browser/YouTube NEVER pauses)
+    2. Write pipewire-filter.conf
+    3. Restart DSP filter service (takes 20ms, completely transparent to browser)
     """
     save_config(config)
+
+    # 1. Ensure persistent audio sink is alive
+    ensure_sink_service_running()
 
     is_enabled = config.get("enabled", True)
     if is_enabled:

@@ -8,11 +8,19 @@ echo "============================================================"
 echo "          Desinstalação do Equalizador para Linux           "
 echo "============================================================"
 
-echo "▶ A parar e desativar o serviço systemd..."
-systemctl --user stop equalizer-linux.service >/dev/null 2>&1 || true
-systemctl --user disable equalizer-linux.service >/dev/null 2>&1 || true
+echo "▶ A parar e desativar os serviços systemd..."
+systemctl --user stop equalizer-linux.service equalizer-sink.service >/dev/null 2>&1 || true
+systemctl --user disable equalizer-linux.service equalizer-sink.service >/dev/null 2>&1 || true
 rm -f "$HOME/.config/systemd/user/equalizer-linux.service"
+rm -f "$HOME/.config/systemd/user/equalizer-sink.service"
 systemctl --user daemon-reload
+
+echo "▶ A restaurar saída padrão de áudio no hardware..."
+python3 -c "
+import sys
+from src.core import restore_physical_default_sink
+restore_physical_default_sink()
+" 2>/dev/null || true
 
 echo "▶ A remover o binário em ~/.local/bin..."
 rm -f "$HOME/.local/bin/equalizer-linux"
@@ -35,4 +43,3 @@ fi
 echo "============================================================"
 echo "✔ Equalizador Linux desinstalado com sucesso."
 echo "============================================================"
-

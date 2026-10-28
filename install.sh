@@ -39,14 +39,15 @@ mkdir -p "$DESKTOP_DEST"
 mkdir -p "$ICON_DEST"
 mkdir -p "$CONFIG_DEST"
 
-# 3. Inicializar configurações e ficheiro PipeWire inicial
+# 3. Inicializar configurações e ficheiros PipeWire
 echo "▶ A gerar ficheiros de configuração padrão..."
 python3 -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR')
-from src.core import ensure_config_dir, load_config, write_pipewire_conf
+from src.core import ensure_config_dir, load_config, write_pipewire_sink_conf, write_pipewire_conf
 ensure_config_dir()
 cfg = load_config()
+write_pipewire_sink_conf()
 write_pipewire_conf(cfg['gains'])
 print('Configurações inicializadas com sucesso.')
 "
@@ -56,12 +57,13 @@ echo "▶ A instalar o binário equalizer-linux em $BIN_DEST..."
 ln -sf "$SCRIPT_DIR/equalizer-linux" "$BIN_DEST/equalizer-linux"
 chmod +x "$BIN_DEST/equalizer-linux"
 
-# 5. Instalar o serviço systemd
-echo "▶ A instalar o serviço systemd de utilizador..."
+# 5. Instalar os serviços systemd
+echo "▶ A instalar os serviços systemd de utilizador..."
+cp "$SCRIPT_DIR/systemd/equalizer-sink.service" "$SYSTEMD_DEST/equalizer-sink.service"
 cp "$SCRIPT_DIR/systemd/equalizer-linux.service" "$SYSTEMD_DEST/equalizer-linux.service"
 systemctl --user daemon-reload
-systemctl --user enable equalizer-linux.service
-systemctl --user restart equalizer-linux.service
+systemctl --user enable equalizer-sink.service equalizer-linux.service
+systemctl --user restart equalizer-sink.service equalizer-linux.service
 
 # 6. Instalar o atalho no menu de aplicações e ícone
 echo "▶ A registar atalho no ambiente de trabalho..."
@@ -82,6 +84,7 @@ echo "✔ INSTALAÇÃO CONCLUÍDA COM SUCESSO!"
 echo "============================================================"
 echo "• O equalizador está ATIVO e a correr em segundo plano."
 echo "• Foi ativado no systemd: arranca automaticamente ao ligar o PC."
+echo "• Arquitetura com sink persistente: ajuste de bandas sem pausar vídeos."
 echo ""
 echo "Como usar:"
 echo "  1. Pelo Menu de Aplicações do Linux: pesquise por 'Equalizador Linux'"
@@ -95,4 +98,3 @@ echo "============================================================"
 
 # Verificar estado
 "$SCRIPT_DIR/equalizer-linux" status || true
-

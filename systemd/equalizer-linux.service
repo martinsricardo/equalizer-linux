@@ -1,8 +1,8 @@
 [Unit]
 Description=Equalizador de Som para Linux (PipeWire Background DSP)
 Documentation=https://github.com/ricardo/equalizer-linux
-After=pipewire.service wireplumber.service
-Wants=pipewire.service wireplumber.service
+After=pipewire.service wireplumber.service equalizer-sink.service
+Wants=pipewire.service wireplumber.service equalizer-sink.service
 PartOf=pipewire.service
 StartLimitIntervalSec=0
 
