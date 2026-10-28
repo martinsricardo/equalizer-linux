@@ -4,6 +4,7 @@ Documentation=https://github.com/ricardo/equalizer-linux
 After=pipewire.service wireplumber.service
 Wants=pipewire.service wireplumber.service
 PartOf=pipewire.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -13,3 +14,4 @@ RestartSec=1s
 
 [Install]
 WantedBy=default.target
+

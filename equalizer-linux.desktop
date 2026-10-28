@@ -9,3 +9,4 @@ Type=Application
 Categories=AudioVideo;Audio;Mixer;Player;
 Keywords=equalizer;equalizador;audio;som;pipewire;bass;dsp;musica;graves;
 StartupNotify=true
+

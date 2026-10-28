@@ -46,6 +46,7 @@ class EqualizerGUI:
         self.root.minsize(780, 580)
         self.root.configure(bg=THEME["bg_dark"])
 
+        self._is_loading = True
         self.config = load_config()
         self.presets = load_presets()
 
@@ -59,6 +60,7 @@ class EqualizerGUI:
         self._init_styles()
         self._build_ui()
         self._load_current_values()
+        self._is_loading = False
 
     def _init_styles(self):
         style = ttk.Style(self.root)
@@ -116,15 +118,15 @@ class EqualizerGUI:
 
         self.power_btn = tk.Button(
             btn_frame,
-            text="LIGADO" if self.enabled_var.get() else "BYPASS",
+            text="🟢 EQUALIZADOR LIGADO" if self.enabled_var.get() else "⚪ MODO BYPASS",
             font=("Ubuntu", 10, "bold"),
-            bg=THEME["accent_green"] if self.enabled_var.get() else THEME["accent_red"],
+            bg="#065f46" if self.enabled_var.get() else "#374151",
             fg="#ffffff",
-            activebackground=THEME["accent_cyan"],
+            activebackground="#047857" if self.enabled_var.get() else "#4b5563",
             activeforeground="#ffffff",
             relief="flat",
-            padx=14,
-            pady=6,
+            padx=16,
+            pady=7,
             cursor="hand2",
             command=self._toggle_power,
         )
@@ -257,7 +259,8 @@ class EqualizerGUI:
                 command=lambda val, idx=i: self._on_slider_change(idx, val),
             )
             scale.pack(fill=tk.Y, pady=2)
-            # Double-click resets band to 0.0
+            # Apply on release and double-click resets band to 0.0
+            scale.bind("<ButtonRelease-1>", lambda e: self._on_release())
             scale.bind("<Double-Button-1>", lambda e, idx=i: self._reset_single_band(idx))
 
             # Freq label
@@ -317,6 +320,7 @@ class EqualizerGUI:
             command=self._on_preamp_change,
         )
         preamp_scale.pack(fill=tk.Y, pady=2)
+        preamp_scale.bind("<ButtonRelease-1>", lambda e: self._on_release())
         preamp_scale.bind("<Double-Button-1>", lambda e: self._reset_preamp())
 
         lbl_preamp = tk.Label(
@@ -405,13 +409,26 @@ class EqualizerGUI:
         self.preamp_val_lbl.config(text=" 0.0 dB")
         self._schedule_apply()
 
-    def _schedule_apply(self):
-        """Debounce applying settings to avoid flooding PipeWire while dragging sliders."""
+    def _on_release(self):
+        """Immediately apply settings when the user finishes dragging a slider."""
+        if self._is_loading:
+            return
         if self.apply_timer:
             self.root.after_cancel(self.apply_timer)
-        self.apply_timer = self.root.after(150, self._apply_now)
+            self.apply_timer = None
+        self._apply_now()
+
+    def _schedule_apply(self):
+        """Debounce applying settings for smooth updates."""
+        if self._is_loading:
+            return
+        if self.apply_timer:
+            self.root.after_cancel(self.apply_timer)
+        self.apply_timer = self.root.after(400, self._apply_now)
 
     def _apply_now(self):
+        if self._is_loading:
+            return
         gains = [round(v.get(), 1) for v in self.band_vars]
         self.config["gains"] = gains
         self.config["preamp"] = round(self.preamp_var.get(), 1)
@@ -423,11 +440,34 @@ class EqualizerGUI:
         new_state = not self.enabled_var.get()
         self.enabled_var.set(new_state)
         self.config["enabled"] = new_state
-        self.power_btn.config(
-            text="LIGADO" if new_state else "BYPASS",
-            bg=THEME["accent_green"] if new_state else THEME["accent_red"],
-        )
+        self._update_power_button()
+        self._draw_curve()
         self._apply_now()
+
+    def _update_power_button(self):
+        is_on = self.enabled_var.get()
+        self.power_btn.config(
+            text="🟢 EQUALIZADOR LIGADO" if is_on else "⚪ MODO BYPASS",
+            bg="#065f46" if is_on else "#374151",
+            activebackground="#047857" if is_on else "#4b5563",
+        )
+
+    def _update_status_display(self):
+        running = is_service_running()
+        is_on = self.enabled_var.get()
+        self._update_power_button()
+        if not is_on:
+            self.status_lbl.config(
+                text="○ Modo Bypass (Áudio direto sem equalização)",
+                fg=THEME["text_muted"],
+            )
+        elif running:
+            self.status_lbl.config(
+                text="● Ativo em segundo plano (PipeWire DSP)",
+                fg=THEME["accent_green"],
+            )
+        else:
+            self.status_lbl.config(text="○ A inicializar serviço...", fg=THEME["accent_orange"])
 
     def _toggle_autostart(self):
         if self.autostart_var.get():
@@ -484,15 +524,6 @@ class EqualizerGUI:
             self.presets = load_presets()
             self.preset_combo.config(values=list(self.presets.keys()))
             self._reset_flat()
-
-    def _update_status_display(self):
-        running = is_service_running()
-        if not self.enabled_var.get():
-            self.status_lbl.config(text="○ Desativado (Modo Bypass - Áudio Direto)", fg=THEME["text_muted"])
-        elif running:
-            self.status_lbl.config(text="● Ativo em segundo plano (PipeWire DSP)", fg=THEME["accent_green"])
-        else:
-            self.status_lbl.config(text="○ Serviço parado", fg=THEME["accent_red"])
 
     def _draw_curve(self):
         """Draw a smooth frequency response curve on the canvas."""
@@ -601,3 +632,4 @@ def launch_gui():
 
 if __name__ == "__main__":
     launch_gui()
+

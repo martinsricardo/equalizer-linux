@@ -110,6 +110,46 @@ def save_config(config: Dict[str, Any]):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 
+def get_physical_default_sink() -> Tuple[Optional[str], Optional[int]]:
+    """Find the active physical (hardware) audio sink node name and ID."""
+    try:
+        out = subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL)
+        nodes = json.loads(out)
+        hardware_sinks = []
+        for n in nodes:
+            props = n.get("info", {}).get("props", {})
+            if props.get("media.class") == "Audio/Sink":
+                name = props.get("node.name", "")
+                if "equalizer" in name.lower() or "easyeffects" in name.lower():
+                    continue
+                if props.get("node.virtual", False):
+                    continue
+                priority = int(props.get("priority.session", 0))
+                hardware_sinks.append((priority, name, n.get("id")))
+        if hardware_sinks:
+            hardware_sinks.sort(key=lambda x: x[0], reverse=True)
+            return hardware_sinks[0][1], hardware_sinks[0][2]
+    except Exception:
+        pass
+    return None, None
+
+
+def restore_physical_default_sink() -> bool:
+    """Restore physical hardware sink as default in WirePlumber."""
+    _, phys_id = get_physical_default_sink()
+    if phys_id is not None:
+        try:
+            res = subprocess.run(
+                ["wpctl", "set-default", str(phys_id)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            return res.returncode == 0
+        except Exception:
+            pass
+    return False
+
+
 def generate_pipewire_filter_conf(gains: List[float]) -> str:
     """Generate the PipeWire SPA-JSON configuration file for the equalizer filter chain."""
     filter_entries = []
@@ -123,6 +163,9 @@ def generate_pipewire_filter_conf(gains: List[float]) -> str:
         filter_entries.append(entry)
 
     filters_block = "\n".join(filter_entries)
+
+    target_name, _ = get_physical_default_sink()
+    target_prop = f'\n                target.object    = "{target_name}"' if target_name else ""
 
     conf_template = f"""# Configuração do Equalizador PipeWire gerada automaticamente pelo equalizer-linux
 # Não edite manualmente enquanto o serviço estiver ativo.
@@ -171,7 +214,7 @@ context.modules = [
             }}
             playback.props = {{
                 node.name        = "{SOURCE_NODE_NAME}"
-                node.passive     = true
+                node.passive     = true{target_prop}
             }}
         }}
     }}
@@ -261,7 +304,8 @@ def start_service() -> bool:
 
 
 def stop_service() -> bool:
-    """Stop the equalizer service."""
+    """Stop the equalizer service and restore the physical default sink."""
+    restore_physical_default_sink()
     try:
         res = subprocess.run(
             ["systemctl", "--user", "stop", SERVICE_NAME],
@@ -337,20 +381,22 @@ def apply_preamp_volume(preamp_db: float):
 def apply_settings(config: Dict[str, Any]) -> bool:
     """
     Apply configuration:
-    1. Write pipewire-filter.conf
-    2. Start/Restart or Stop service depending on config['enabled']
+    1. Write pipewire-filter.conf (flat 0 dB if bypassed)
+    2. Start or restart service
     3. Update default sink & preamp volume
     """
     save_config(config)
 
-    if not config.get("enabled", True):
-        # Equalizer is bypassed/disabled: stop service so audio routes directly
-        if is_service_running():
-            stop_service()
-        return True
+    is_enabled = config.get("enabled", True)
+    if is_enabled:
+        active_gains = config["gains"]
+        preamp = config.get("preamp", 0.0)
+    else:
+        # Bypass mode: maintain audio stream alive with transparent 0.0 dB pass-through
+        active_gains = [0.0] * len(BANDS_SPEC)
+        preamp = 0.0
 
-    # Enabled: write new filter configuration
-    write_pipewire_conf(config["gains"])
+    write_pipewire_conf(active_gains)
 
     if is_service_running():
         success = restart_service()
@@ -358,11 +404,7 @@ def apply_settings(config: Dict[str, Any]) -> bool:
         success = start_service()
 
     if success:
-        # Preamp adjustment
-        preamp = config.get("preamp", 0.0)
-        if preamp != 0.0:
-            apply_preamp_volume(preamp)
-        # Ensure default
+        apply_preamp_volume(preamp)
         set_default_sink()
 
     return success

@@ -95,3 +95,4 @@ echo "============================================================"
 
 # Verificar estado
 "$SCRIPT_DIR/equalizer-linux" status || true
+

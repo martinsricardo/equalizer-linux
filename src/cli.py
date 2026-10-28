@@ -285,3 +285,4 @@ def run_cli(args: List[str]):
             launch_gui()
         else:
             cmd_status()
+

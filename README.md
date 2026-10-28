@@ -144,3 +144,4 @@ Se algum dia desejar remover o equalizador:
 ```
 
 O script irá parar o serviço, remover o arranque automático do systemd e limpar os atalhos e binários.
+
