@@ -1,0 +1,15 @@
+[Unit]
+Description=Equalizador de Som para Linux (PipeWire Background DSP)
+Documentation=https://github.com/ricardo/equalizer-linux
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+PartOf=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/pipewire -c %h/.config/equalizer-linux/pipewire-filter.conf
+Restart=always
+RestartSec=1s
+
+[Install]
+WantedBy=default.target

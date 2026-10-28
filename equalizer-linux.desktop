@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Equalizador Linux
+GenericName=Equalizador de Som
+Comment=Equalizador de som de 10 bandas para Linux com processamento em segundo plano (PipeWire)
+Exec=equalizer-linux gui
+Icon=equalizer-linux
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Mixer;Player;
+Keywords=equalizer;equalizador;audio;som;pipewire;bass;dsp;musica;graves;
+StartupNotify=true
